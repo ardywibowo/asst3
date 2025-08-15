@@ -44,32 +44,35 @@ __global__ void block_exclusive_scan(const int* __restrict__ in, int* __restrict
                                      int N, int* __restrict__ block_sums) {
     __shared__ int sh[TPB];
 
-    int gid = blockIdx.x * blockDim.x + threadIdx.x;
-    int tid = threadIdx.x;
+    const int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    const int tid = threadIdx.x;
+    const int bid = blockIdx.x;
 
-    int x = (gid < N) ? in[gid] : 0;
+    // number of valid elements in this block
+    const int n = min(TPB, max(0, N - bid * TPB));
+
+    // Initialize shared memory (zeros for inactive lanes)
+    int x = (tid < n) ? in[gid] : 0;
     sh[tid] = x;
     __syncthreads();
 
+    // Hillis–Steele inclusive scan over the first n lanes
     for (int offset = 1; offset < TPB; offset <<= 1) {
-        int t = (tid >= offset) ? sh[tid - offset] : 0;
+        int t = 0;
+        if (tid < n && tid >= offset) t = sh[tid - offset];
         __syncthreads();
-        if (tid >= offset) sh[tid] += t;
+        if (tid < n && tid >= offset) sh[tid] += t;
         __syncthreads();
     }
 
-    // Convert to exclusive by shifting right and inserting 0 at start
-    int excl = (tid == 0) ? 0 : sh[tid - 1];
+    // Convert to exclusive
+    if (tid < n && gid < N) {
+        out[gid] = (tid == 0) ? 0 : sh[tid - 1];
+    }
 
-    if (gid < N) out[gid] = excl;
-
-    // Write per-block total (the inclusive last element) for carry-out
-    if (block_sums && tid == TPB - 1) {
-        // Last thread in block holds the block total in sh[TPB-1]
-        block_sums[blockIdx.x] = sh[TPB - 1];
-    } else if (block_sums && (gid + (TPB - 1 - tid)) >= N && tid == (N - 1 - blockIdx.x * TPB)) {
-        // Handle short last block: the last *valid* thread writes the sum
-        block_sums[blockIdx.x] = sh[tid];
+    // Write this block's total (the inclusive last valid element)
+    if (block_sums && n > 0 && tid == n - 1) {
+        block_sums[bid] = sh[tid];
     }
 }
 
@@ -79,31 +82,59 @@ __global__ void add_block_offsets(int* __restrict__ out, int N,
                                   const int* __restrict__ scanned_block_sums) {
     int gid = blockIdx.x * blockDim.x + threadIdx.x;
     int bid = blockIdx.x;
-    if (bid == 0) return;  // first block has zero offset
-    int offset = scanned_block_sums[bid - 1];
+
+    // offset must be the exclusive scan value for THIS block
+    int offset = scanned_block_sums[bid];
+
     if (gid < N) out[gid] += offset;
 }
 
-void exclusive_scan(const int* d_in, int N, int* d_out) {
-    constexpr int TPB = 256;
+// Recursively scan an array in-place on the GPU using the same kernels.
+static void device_exclusive_scan_inplace(int* d_arr, int N) {
+    constexpr int TPB = THREADS_PER_BLOCK;
     int num_blocks = (N + TPB - 1) / TPB;
 
-    int* d_block_sums = nullptr;
-    if (num_blocks > 1) cudaMalloc(&d_block_sums, num_blocks * sizeof(int));
+    if (num_blocks <= 1) {
+        // Single-block scan
+        block_exclusive_scan<TPB><<<1, TPB>>>(d_arr, d_arr, N, nullptr);
+        return;
+    }
 
+    // Multi-block: scan each block and collect their totals
+    int* d_block_sums = nullptr;
+    cudaMalloc(&d_block_sums, num_blocks * sizeof(int));
+    block_exclusive_scan<TPB><<<num_blocks, TPB>>>(d_arr, d_arr, N, d_block_sums);
+
+    // Recursively scan the per-block totals (in-place)
+    device_exclusive_scan_inplace(d_block_sums, num_blocks);
+
+    // Uniform add offsets to each block
+    add_block_offsets<TPB><<<num_blocks, TPB>>>(d_arr, N, d_block_sums);
+
+    cudaFree(d_block_sums);
+}
+
+void exclusive_scan(const int* d_in, int N, int* d_out) {
+    constexpr int TPB = THREADS_PER_BLOCK;
+    int num_blocks = (N + TPB - 1) / TPB;
+
+    if (num_blocks <= 1) {
+        block_exclusive_scan<TPB><<<1, TPB>>>(d_in, d_out, N, nullptr);
+        return;
+    }
+
+    // First pass: per-block exclusive scan from d_in -> d_out and collect block sums
+    int* d_block_sums = nullptr;
+    cudaMalloc(&d_block_sums, num_blocks * sizeof(int));
     block_exclusive_scan<TPB><<<num_blocks, TPB>>>(d_in, d_out, N, d_block_sums);
 
-    if (num_blocks > 1) {
-        if (num_blocks <= TPB) {
-            block_exclusive_scan<TPB><<<1, TPB>>>(d_block_sums, d_block_sums, num_blocks, nullptr);
-        } else {
-            block_exclusive_scan<TPB><<<(num_blocks + TPB - 1) / TPB, TPB>>>(d_block_sums, d_block_sums, num_blocks, nullptr);
-        }
+    // Scan block sums in-place (proper recursive/global scan)
+    device_exclusive_scan_inplace(d_block_sums, num_blocks);
 
-        // 3) Uniform add per block
-        add_block_offsets<TPB><<<num_blocks, TPB>>>(d_out, N, d_block_sums);
-        cudaFree(d_block_sums);
-    }
+    // Add scanned block offsets back to each block’s output
+    add_block_offsets<TPB><<<num_blocks, TPB>>>(d_out, N, d_block_sums);
+
+    cudaFree(d_block_sums);
 }
 
 //
@@ -192,18 +223,6 @@ double cudaScanThrust(int* inarray, int* end, int* resultarray) {
 //
 // Returns the total number of pairs found
 int find_repeats(int* device_input, int length, int* device_output) {
-    // CS149 TODO:
-    //
-    // Implement this function. You will probably want to
-    // make use of one or more calls to exclusive_scan(), as well as
-    // additional CUDA kernel launches.
-    //
-    // Note: As in the scan code, the calling code ensures that
-    // allocated arrays are a power of 2 in size, so you can use your
-    // exclusive_scan function with them. However, your implementation
-    // must ensure that the results of find_repeats are correct given
-    // the actual array length.
-
     return 0;
 }
 
