@@ -314,7 +314,6 @@ shadePixel(int circleIndex, float2 pixelCenter, float3 p, float4* imagePtr) {
     float pixelDist = diffX * diffX + diffY * diffY;
 
     float rad = cuConstRendererParams.radius[circleIndex];
-    ;
     float maxDist = rad * rad;
 
     // circle does not contribute to the image
@@ -368,51 +367,98 @@ shadePixel(int circleIndex, float2 pixelCenter, float3 p, float4* imagePtr) {
     // END SHOULD-BE-ATOMIC REGION
 }
 
+// No global memory here — blend into accum in registers
+__device__ __forceinline__ void shadePixelAccum(int circleIndex, float2 pixelCenter, float3 p,
+                                                float4& accum, bool snowScene) {
+    const float dx = p.x - pixelCenter.x;
+    const float dy = p.y - pixelCenter.y;
+    const float d2 = dx * dx + dy * dy;
+
+    const float r = cuConstRendererParams.radius[circleIndex];
+    const float r2 = r * r;
+    if (d2 > r2) return;
+
+    float3 rgb;
+    float alpha;
+    if (snowScene) {
+        const float kCircleMaxAlpha = .5f;
+        const float falloffScale = 4.f;
+        const float normDist = sqrtf(d2) / r;
+        rgb = lookupColor(normDist);
+        float maxAlpha = .6f + .4f * (1.f - p.z);
+        maxAlpha = kCircleMaxAlpha * fmaxf(fminf(maxAlpha, 1.f), 0.f);
+        alpha = maxAlpha * expf(-falloffScale * normDist * normDist);
+    } else {
+        rgb = *(float3*)&(cuConstRendererParams.color[3 * circleIndex]);
+        alpha = .5f;
+    }
+
+    const float oma = 1.f - alpha;
+    accum.x = alpha * rgb.x + oma * accum.x;
+    accum.y = alpha * rgb.y + oma * accum.y;
+    accum.z = alpha * rgb.z + oma * accum.z;
+    accum.w = accum.w + alpha;
+}
+
 // kernelRenderCircles -- (CUDA device code)
 //
 // Each thread renders a circle.  Since there is no protection to
 // ensure order of update or mutual exclusion on the output image, the
 // resulting image will be incorrect.
+__device__ __forceinline__ int circleInBoxConservative(float cx, float cy, float r,
+                                                       float boxL, float boxR, float boxT, float boxB) {
+    // boxT <= y <= boxB in screen space
+    return (cx >= (boxL - r)) && (cx <= (boxR + r)) &&
+           (cy >= (boxT - r)) && (cy <= (boxB + r));
+}
+
 __global__ void kernelRenderCircles() {
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int global_i = blockIdx.x * blockDim.x + threadIdx.x;
+    int global_j = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (index >= cuConstRendererParams.numCircles)
-        return;
-
-    int index3 = 3 * index;
-
-    // read position and radius
-    float3 p = *(float3*)(&cuConstRendererParams.position[index3]);
-    float rad = cuConstRendererParams.radius[index];
-
-    // compute the bounding box of the circle. The bound is in integer
-    // screen coordinates, so it's clamped to the edges of the screen.
     short imageWidth = cuConstRendererParams.imageWidth;
     short imageHeight = cuConstRendererParams.imageHeight;
-    short minX = static_cast<short>(imageWidth * (p.x - rad));
-    short maxX = static_cast<short>(imageWidth * (p.x + rad)) + 1;
-    short minY = static_cast<short>(imageHeight * (p.y - rad));
-    short maxY = static_cast<short>(imageHeight * (p.y + rad)) + 1;
-
-    // a bunch of clamps.  Is there a CUDA built-in for this?
-    short screenMinX = (minX > 0) ? ((minX < imageWidth) ? minX : imageWidth) : 0;
-    short screenMaxX = (maxX > 0) ? ((maxX < imageWidth) ? maxX : imageWidth) : 0;
-    short screenMinY = (minY > 0) ? ((minY < imageHeight) ? minY : imageHeight) : 0;
-    short screenMaxY = (maxY > 0) ? ((maxY < imageHeight) ? maxY : imageHeight) : 0;
 
     float invWidth = 1.f / imageWidth;
     float invHeight = 1.f / imageHeight;
 
-    // for all pixels in the bonding box
-    for (int pixelY = screenMinY; pixelY < screenMaxY; pixelY++) {
-        float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * imageWidth + screenMinX)]);
-        for (int pixelX = screenMinX; pixelX < screenMaxX; pixelX++) {
-            float2 pixelCenterNorm = make_float2(invWidth * (static_cast<float>(pixelX) + 0.5f),
-                                                 invHeight * (static_cast<float>(pixelY) + 0.5f));
-            shadePixel(index, pixelCenterNorm, p, imgPtr);
-            imgPtr++;
-        }
+    if (global_i >= imageWidth || global_j >= imageHeight) {
+        return;
     }
+
+    const int tileMinX = blockIdx.x * blockDim.x;
+    const int tileMaxX = min(tileMinX + blockDim.x, imageWidth);
+    const int tileMinY = blockIdx.y * blockDim.y;
+    const int tileMaxY = min(tileMinY + blockDim.y, imageHeight);
+
+    float boxL = static_cast<float>(tileMinX) * invWidth;
+    float boxR = static_cast<float>(tileMaxX) * invWidth;
+    float boxT = static_cast<float>(tileMinY) * invHeight;
+    float boxB = static_cast<float>(tileMaxY) * invHeight;
+
+    float normX = invWidth * (static_cast<float>(global_i) + 0.5f);
+    float normY = invHeight * (static_cast<float>(global_j) + 0.5f);
+    float2 pixelCenterNorm = make_float2(normX, normY);
+    float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (global_j * imageWidth + global_i)]);
+    float4 accum = *imgPtr;
+
+    const bool snow = (cuConstRendererParams.sceneName == SNOWFLAKES) ||
+                      (cuConstRendererParams.sceneName == SNOWFLAKES_SINGLE_FRAME);
+
+    int numCircles = cuConstRendererParams.numCircles;
+    for (int circleIndex = 0; circleIndex < numCircles; circleIndex++) {
+        // read position and radius
+        float3 p = *(float3*)(&cuConstRendererParams.position[3 * circleIndex]);
+        float rad = cuConstRendererParams.radius[circleIndex];
+
+        if (!circleInBoxConservative(p.x, p.y, rad, boxL, boxR, boxT, boxB)) {
+            continue;
+        }
+
+        shadePixelAccum(circleIndex, pixelCenterNorm, p, accum, snow);
+    }
+
+    *imgPtr = accum;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////
@@ -611,8 +657,8 @@ void CudaRenderer::advanceAnimation() {
 
 void CudaRenderer::render() {
     // 256 threads per block is a healthy number
-    dim3 blockDim(256, 1);
-    dim3 gridDim((numCircles + blockDim.x - 1) / blockDim.x);
+    dim3 blockDim(16, 16);
+    dim3 gridDim((image->width + blockDim.x - 1) / blockDim.x, (image->height + blockDim.y - 1) / blockDim.y);
 
     kernelRenderCircles<<<gridDim, blockDim>>>();
     cudaDeviceSynchronize();
