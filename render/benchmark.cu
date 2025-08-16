@@ -1,71 +1,70 @@
-#include <string>
+#include <cuda.h>
 #include <math.h>
 
-#include <cuda.h>
+#include <string>
 
 #include "circleRenderer.h"
 #include "cycleTimer.h"
 #include "image.h"
 #include "ppm.h"
 
-
 static void compare_images(const Image* ref_image, const Image* cuda_image) {
     int i;
 
     int mismatch_count = 0;
-    
+
     if (ref_image->width != cuda_image->width || ref_image->height != cuda_image->height) {
-        printf ("Error : width or height of reference and cuda not matching\n");
-        printf ("Cuda : width = %d, height = %d\n", cuda_image->width, cuda_image->height);
-        printf ("Ref : width = %d, height = %d\n", ref_image->width, ref_image->height);
-        exit (1);
+        printf("Error : width or height of reference and cuda not matching\n");
+        printf("Cuda : width = %d, height = %d\n", cuda_image->width, cuda_image->height);
+        printf("Ref : width = %d, height = %d\n", ref_image->width, ref_image->height);
+        exit(1);
     }
-    
-    for (i = 0 ; i < 4 * ref_image->width * ref_image->height; i++) {
+
+    for (i = 0; i < 4 * ref_image->width * ref_image->height; i++) {
         // Compare with floating point error tolerance of 0.1f and ignore alpha
-        if ((!isfinite(cuda_image->data[i]) || fabs(ref_image->data[i] - cuda_image->data[i]) > 0.1f) && i%4 != 3) {
+        if ((!isfinite(cuda_image->data[i]) || fabs(ref_image->data[i] - cuda_image->data[i]) > 0.1f) && i % 4 != 3) {
             mismatch_count++;
             // Get pixel number and print values
-            int j = i/4;
-            printf ("Mismatch detected at pixel [%d][%d], value = %f, expected %f ", 
-                    j/cuda_image->width, j%cuda_image->width, 
-                    cuda_image->data[i], ref_image->data[i]);
+            int j = i / 4;
+            printf("Mismatch detected at pixel [%d][%d], value = %f, expected %f ",
+                   j / cuda_image->width, j % cuda_image->width,
+                   cuda_image->data[i], ref_image->data[i]);
 
-            printf ("for color ");
-            switch (i%4) {
-                case 0 : printf ("Red\n"); break;
-                case 1 : printf ("Green\n"); break;
-                case 2 : printf ("Blue\n"); break;
+            printf("for color ");
+            switch (i % 4) {
+                case 0:
+                    printf("Red\n");
+                    break;
+                case 1:
+                    printf("Green\n");
+                    break;
+                case 2:
+                    printf("Blue\n");
+                    break;
             }
-
-
         }
 
         // Ignore 5 errors - may come up because of rounding in distance calculation
         if (mismatch_count > 5) {
-            printf ("ERROR : Mismatch detected between reference and actual\n");
-            exit (1);
+            printf("ERROR : Mismatch detected between reference and actual\n");
+            exit(1);
         }
-
     }
 
-    printf ("***************** Correctness check passed **************************\n");
+    printf("***************** Correctness check passed **************************\n");
 }
 
-void
-startBenchmark(
+void startBenchmark(
     CircleRenderer* renderer,
     int startFrame,
     int totalFrames,
-    const std::string& frameFilename)
-{
-
+    const std::string& frameFilename) {
     double totalClearTime = 0.f;
     double totalAdvanceTime = 0.f;
     double totalRenderTime = 0.f;
     double totalFileSaveTime = 0.f;
     double totalTime = 0.f;
-    double startTime= 0.f;
+    double startTime = 0.f;
 
     bool dumpFrames = frameFilename.length() > 0;
 
@@ -73,8 +72,7 @@ startBenchmark(
     if (dumpFrames)
         printf("Dumping frames to %s_xxx.ppm\n", frameFilename.c_str());
 
-    for (int frame=0; frame<startFrame + totalFrames; frame++) {
-
+    for (int frame = 0; frame < startFrame + totalFrames; frame++) {
         if (frame == startFrame)
             startTime = CycleTimer::currentSeconds();
 
@@ -100,7 +98,7 @@ startBenchmark(
                 char filename[1024];
                 sprintf(filename, "%s_%04d.ppm", frameFilename.c_str(), frame);
                 writePPMImage(renderer->getImage(), filename);
-                //renderer->dumpParticles("snow.par");
+                // renderer->dumpParticles("snow.par");
             }
 
             double endFileSaveTime = CycleTimer::currentSeconds();
@@ -123,25 +121,20 @@ startBenchmark(
         printf("File IO:  %.4f ms\n", 1000.f * totalFileSaveTime / totalFrames);
     printf("\n");
     printf("Overall:  %.4f sec (note units are seconds)\n", totalTime);
-
 }
 
-
-void
-CheckBenchmark(
+void CheckBenchmark(
     CircleRenderer* ref_renderer,
     CircleRenderer* cuda_renderer,
     int startFrame,
     int totalFrames,
-    const std::string& frameFilename)
-{
-
+    const std::string& frameFilename) {
     double totalClearTime = 0.f;
     double totalAdvanceTime = 0.f;
     double totalRenderTime = 0.f;
     double totalFileSaveTime = 0.f;
     double totalTime = 0.f;
-    double startTime= 0.f;
+    double startTime = 0.f;
 
     bool dumpFrames = frameFilename.length() > 0;
 
@@ -149,8 +142,7 @@ CheckBenchmark(
     if (dumpFrames)
         printf("Dumping frames to %s_xxx.ppm\n", frameFilename.c_str());
 
-    for (int frame=0; frame<startFrame + totalFrames; frame++) {
-
+    for (int frame = 0; frame < startFrame + totalFrames; frame++) {
         if (frame == startFrame)
             startTime = CycleTimer::currentSeconds();
 
@@ -164,7 +156,7 @@ CheckBenchmark(
         double startAdvanceTime = CycleTimer::currentSeconds();
         cuda_renderer->advanceAnimation();
         cudaDeviceSynchronize();
-        double endAdvanceTime = CycleTimer::currentSeconds(); 
+        double endAdvanceTime = CycleTimer::currentSeconds();
 
         ref_renderer->render();
         double startRenderTime = CycleTimer::currentSeconds();
@@ -178,7 +170,7 @@ CheckBenchmark(
                 char filename[1024];
                 sprintf(filename, "%s_%04d.ppm", frameFilename.c_str(), frame);
                 writePPMImage(cuda_renderer->getImage(), filename);
-                //renderer->dumpParticles("snow.par");
+                // renderer->dumpParticles("snow.par");
             }
 
             double endFileSaveTime = CycleTimer::currentSeconds();
@@ -190,11 +182,10 @@ CheckBenchmark(
         }
     }
 
-
     compare_images(ref_renderer->getImage(), cuda_renderer->getImage());
 
     double endTime = CycleTimer::currentSeconds();
-    totalTime = endTime - startTime; 
+    totalTime = endTime - startTime;
 
     printf("Clear:    %.4f ms\n", 1000.f * totalClearTime / totalFrames);
     printf("Advance:  %.4f ms\n", 1000.f * totalAdvanceTime / totalFrames);
@@ -204,5 +195,4 @@ CheckBenchmark(
         printf("File IO:  %.4f ms\n", 1000.f * totalFileSaveTime / totalFrames);
     printf("\n");
     printf("Overall:  %.4f sec (note units are seconds)\n", totalTime);
-
 }

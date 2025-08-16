@@ -3,11 +3,8 @@
 
 #include "circleRenderer.h"
 
-
 class RefRenderer : public CircleRenderer {
-
-private:
-
+   private:
     Image* image;
     SceneName sceneName;
 
@@ -17,8 +14,7 @@ private:
     float* color;
     float* radius;
 
-public:
-
+   public:
     RefRenderer();
     virtual ~RefRenderer();
 
@@ -44,6 +40,5 @@ public:
         float px, float py, float pz,
         float* pixelData);
 };
-
 
 #endif

@@ -14,9 +14,9 @@ typedef enum {
     CIRCLE_TEST_100K,
     PATTERN,
     SNOWFLAKES,
-    FIREWORKS, 
-    HYPNOSIS, 
-    BOUNCING_BALLS, 
+    FIREWORKS,
+    HYPNOSIS,
+    BOUNCING_BALLS,
     SNOWFLAKES_SINGLE_FRAME,
     BIG_LITTLE,
     LITTLE_BIG,
@@ -24,12 +24,9 @@ typedef enum {
     MICRO_2M,
 } SceneName;
 
-
 class CircleRenderer {
-
-public:
-
-    virtual ~CircleRenderer() { };
+   public:
+    virtual ~CircleRenderer() {};
 
     virtual const Image* getImage() = 0;
 
@@ -45,9 +42,7 @@ public:
 
     virtual void render() = 0;
 
-    //virtual void dumpParticles(const char* filename) {}
-
+    // virtual void dumpParticles(const char* filename) {}
 };
-
 
 #endif

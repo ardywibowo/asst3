@@ -7,11 +7,8 @@
 
 #include "circleRenderer.h"
 
-
 class CudaRenderer : public CircleRenderer {
-
-private:
-
+   private:
     Image* image;
     SceneName sceneName;
 
@@ -27,8 +24,7 @@ private:
     float* cudaDeviceRadius;
     float* cudaDeviceImageData;
 
-public:
-
+   public:
     CudaRenderer();
     virtual ~CudaRenderer();
 
@@ -52,6 +48,5 @@ public:
         float px, float py, float pz,
         float* pixelData);
 };
-
 
 #endif

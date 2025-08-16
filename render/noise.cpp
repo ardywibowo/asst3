@@ -1,6 +1,5 @@
 #include "noise.h"
 
-
 /**
  * This is the table of permutations required by the noise functions to
  * hash their input to generate the X coordinates.
@@ -22,8 +21,7 @@ static int NoiseXPermutationTable[] = {
     168, 89, 235, 238, 156, 172, 63, 249, 197, 35, 0, 28, 234, 237, 2, 210,
     247, 178, 103, 52, 141, 228, 70, 218, 112, 226, 248, 106, 157, 20, 83,
     118, 240, 128, 11, 211, 153, 42, 149, 216, 93, 69, 61, 220, 47, 199,
-    219, 124, 80, 26, 58, 162, 39, 246, 192
-};
+    219, 124, 80, 26, 58, 162, 39, 246, 192};
 
 /**
  * This is the table of permutations required by the noise functions to
@@ -46,8 +44,7 @@ static int NoiseYPermutationTable[] = {
     197, 226, 98, 247, 124, 117, 65, 10, 1, 107, 243, 16, 168, 54, 196,
     202, 183, 30, 133, 112, 125, 179, 31, 248, 176, 213, 140, 84, 24, 164,
     132, 51, 131, 255, 144, 8, 224, 173, 153, 242, 160, 29, 43, 149, 6,
-    155, 148, 175, 53, 151, 250, 174, 59, 187, 119
-};
+    155, 148, 175, 53, 151, 250, 174, 59, 187, 119};
 
 /**
  * A table of 256 random values, evenly distributed between -1.0 and 1.0.
@@ -95,37 +92,31 @@ static float Noise1DValueTable[] = {
     -0.192157, -0.686275, -0.356863, 0.701961, 0.74902, 0.913725, 0.843137,
     -0.560784, 0.968627, -0.72549, 0.0823529, 0.2, 0.176471, -0.505882,
     -0.207843, -0.733333, -0.913725, -0.498039, 0.105882, -0.0352941,
-        -0.529412
-};
+    -0.529412};
 
-
-void
-vec2CellNoise(float location[3], float result[2], int index)
-{
-    int integer_of_x = static_cast<int>( location[0] );
-    int integer_of_y = static_cast<int>( location[1] );
-    int integer_of_z = static_cast<int>( location[2] );
-    int hash = NoiseXPermutationTable[ (integer_of_x*index) & 0xFF ];
-    hash = NoiseXPermutationTable[ ( hash + integer_of_y ) & 0xFF ];
-    hash = NoiseXPermutationTable[ ( hash + integer_of_z ) & 0xFF ];
-    float x_result = Noise1DValueTable[ hash ];
-    hash = NoiseYPermutationTable[ integer_of_x & 0xFF ];
-    hash = NoiseYPermutationTable[ ( hash + integer_of_y ) & 0xFF ];
-    hash = NoiseYPermutationTable[ ( hash + integer_of_z ) & 0xFF ];
-    float y_result = Noise1DValueTable[ hash ];
-    //hash = NoiseZPermutationTable[ integer_of_x & 0xFF ];
-    //hash = NoiseZPermutationTable[ ( hash + integer_of_y ) & 0xFF ];
-    //hash = NoiseZPermutationTable[ ( hash + integer_of_z ) & 0xFF ];
-    //float z_result = Noise1DValueTable[ hash ];
+void vec2CellNoise(float location[3], float result[2], int index) {
+    int integer_of_x = static_cast<int>(location[0]);
+    int integer_of_y = static_cast<int>(location[1]);
+    int integer_of_z = static_cast<int>(location[2]);
+    int hash = NoiseXPermutationTable[(integer_of_x * index) & 0xFF];
+    hash = NoiseXPermutationTable[(hash + integer_of_y) & 0xFF];
+    hash = NoiseXPermutationTable[(hash + integer_of_z) & 0xFF];
+    float x_result = Noise1DValueTable[hash];
+    hash = NoiseYPermutationTable[integer_of_x & 0xFF];
+    hash = NoiseYPermutationTable[(hash + integer_of_y) & 0xFF];
+    hash = NoiseYPermutationTable[(hash + integer_of_z) & 0xFF];
+    float y_result = Noise1DValueTable[hash];
+    // hash = NoiseZPermutationTable[ integer_of_x & 0xFF ];
+    // hash = NoiseZPermutationTable[ ( hash + integer_of_y ) & 0xFF ];
+    // hash = NoiseZPermutationTable[ ( hash + integer_of_z ) & 0xFF ];
+    // float z_result = Noise1DValueTable[ hash ];
     result[0] = x_result;
     result[1] = y_result;
-    //result[2] = z_result;
+    // result[2] = z_result;
 }
 
-void
-getNoiseTables(int** permX, int** permY, float** value1D) {
+void getNoiseTables(int** permX, int** permY, float** value1D) {
     *permX = NoiseXPermutationTable;
     *permY = NoiseYPermutationTable;
     *value1D = Noise1DValueTable;
 }
-
