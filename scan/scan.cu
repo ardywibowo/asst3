@@ -40,39 +40,47 @@ static inline int nextPow2(int n) {
 // places it in result
 
 template <int TPB>
-__global__ void block_exclusive_scan(const int* __restrict__ in, int* __restrict__ out,
-                                     int N, int* __restrict__ block_sums) {
-    __shared__ int sh[TPB];
+__global__ void block_exclusive_scan(
+    const int* __restrict__ in,
+    int* __restrict__ out,
+    int N,
+    int* __restrict__ block_sums) {
+    __shared__ int shared[TPB];
 
-    const int gid = blockIdx.x * blockDim.x + threadIdx.x;
-    const int tid = threadIdx.x;
-    const int bid = blockIdx.x;
+    const int global_i = blockDim.x * blockIdx.x + threadIdx.x;
+    const int block_i = blockIdx.x;
+    const int local_i = threadIdx.x;
 
-    // number of valid elements in this block
-    const int n = min(TPB, max(0, N - bid * TPB));
+    const int n = min(TPB, max(0, N - block_i * TPB));
 
-    // Initialize shared memory (zeros for inactive lanes)
-    int x = (tid < n) ? in[gid] : 0;
-    sh[tid] = x;
+    if (global_i < N) {
+        shared[local_i] = in[global_i];
+    }
     __syncthreads();
 
-    // Hillis–Steele inclusive scan over the first n lanes
-    for (int offset = 1; offset < TPB; offset <<= 1) {
-        int t = 0;
-        if (tid < n && tid >= offset) t = sh[tid - offset];
+    int tmp;
+    for (int stride = 1; stride < TPB; stride <<= 1) {
+        if (local_i >= stride && global_i < N) {
+            tmp = shared[local_i] + shared[local_i - stride];
+        }
         __syncthreads();
-        if (tid < n && tid >= offset) sh[tid] += t;
+
+        if (local_i >= stride && global_i < N) {
+            shared[local_i] = tmp;
+        }
         __syncthreads();
     }
 
-    // Convert to exclusive
-    if (tid < n && gid < N) {
-        out[gid] = (tid == 0) ? 0 : sh[tid - 1];
+    if (global_i < N) {
+        if (local_i == 0) {
+            out[global_i] = 0;
+        } else {
+            out[global_i] = shared[local_i - 1];
+        }
     }
 
-    // Write this block's total (the inclusive last valid element)
-    if (block_sums && n > 0 && tid == n - 1) {
-        block_sums[bid] = sh[tid];
+    if (block_sums && local_i == n - 1) {
+        block_sums[block_i] = shared[local_i];
     }
 }
 
@@ -123,18 +131,14 @@ void exclusive_scan(const int* d_in, int N, int* d_out) {
         return;
     }
 
-    // First pass: per-block exclusive scan from d_in -> d_out and collect block sums
-    int* d_block_sums = nullptr;
-    cudaMalloc(&d_block_sums, num_blocks * sizeof(int));
-    block_exclusive_scan<TPB><<<num_blocks, TPB>>>(d_in, d_out, N, d_block_sums);
+    int* block_sums = nullptr;
+    cudaMalloc(&block_sums, num_blocks * sizeof(int));
+    block_exclusive_scan<TPB><<<num_blocks, TPB>>>(d_in, d_out, N, block_sums);
+    device_exclusive_scan_inplace(block_sums, num_blocks);
 
-    // Scan block sums in-place (proper recursive/global scan)
-    device_exclusive_scan_inplace(d_block_sums, num_blocks);
+    add_block_offsets<TPB><<<num_blocks, TPB>>>(d_out, N, block_sums);
 
-    // Add scanned block offsets back to each block’s output
-    add_block_offsets<TPB><<<num_blocks, TPB>>>(d_out, N, d_block_sums);
-
-    cudaFree(d_block_sums);
+    cudaFree(block_sums);
 }
 
 //
@@ -169,7 +173,7 @@ double cudaScan(int* inarray, int* end, int* resultarray) {
     // vector if desired.  If you do this, you will need to keep this
     // in mind when calling exclusive_scan from find_repeats.
     cudaMemcpy(device_input, inarray, (end - inarray) * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(device_result, inarray, (end - inarray) * sizeof(int), cudaMemcpyHostToDevice);
+    // cudaMemcpy(device_result, inarray, (end - inarray) * sizeof(int), cudaMemcpyHostToDevice);
 
     double startTime = CycleTimer::currentSeconds();
 
