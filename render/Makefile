@@ -28,14 +28,14 @@ LIBS       :=
 FRAMEWORKS :=
 
 NVCCFLAGS=-O3 -m64
-LIBS += GL glut cudart
+LIBS += cudart
 
 ifneq ($(wildcard /opt/cuda-8.0/.*),)
 # Latedays
 LDFLAGS=-L/opt/cuda-8.0/lib64/ -lcudart
 else
 # GHC
-LDFLAGS=-L/usr/local/cuda/lib64/ -lcudart
+LDFLAGS=-L/usr/local/cuda/lib64/ -lcudart -lGL libglapi_stub.a /usr/lib/x86_64-linux-gnu/libglut.a /usr/lib/x86_64-linux-gnu/libGLU.a -lX11 -lXi -lXmu -lXxf86vm -lpthread -ldl
 endif
 
 LDLIBS  := $(addprefix -l, $(LIBS))
