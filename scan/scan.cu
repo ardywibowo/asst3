@@ -222,8 +222,72 @@ double cudaScanThrust(int* inarray, int* end, int* resultarray) {
 // indices `i` for which `device_input[i] == device_input[i+1]`.
 //
 // Returns the total number of pairs found
-int find_repeats(int* device_input, int length, int* device_output) {
-    return 0;
+// __global__ void mark_repeats(const int* __restrict__ in, int* __restrict__ out, int N) {
+//     const int gid = blockIdx.x * blockDim.x + threadIdx.x;
+//     if (gid < N) {
+//         int is_rep = (gid + 1 < N) && (in[gid] == in[gid + 1]);
+//         out[gid] = is_rep ? 1 : 0;
+//     }
+// }
+
+__global__ void mark_repeats(
+    const int* __restrict__ in,
+    int* __restrict__ flag,
+    int N) {
+    int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    int lane = threadIdx.x & 31;
+
+    int val = (gid < N) ? in[gid] : 0;
+    int nxt = __shfl_down_sync(0xffffffff, val, 1);  // neighbor within warp
+
+    // Fix the warp boundary: lane 31 fetches the true next element from global
+    if (lane == 31) {
+        nxt = (gid + 1 < N) ? in[gid + 1] : 0;
+    }
+
+    if (gid < N) {
+        flag[gid] = (gid + 1 < N && val == nxt) ? 1 : 0;
+    }
+}
+
+__global__ void scatter_indices(
+    const int* __restrict__ flag,
+    const int* __restrict__ pos,
+    int N,
+    int* __restrict__ out_indices) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i + 1 < N && flag[i]) {
+        int j = pos[i];      // unique slot for this repeat
+        out_indices[j] = i;  // store the index i where in[i] == in[i+1]
+    }
+}
+
+int find_repeats(int* d_in, int length, int* d_out) {
+    constexpr int TPB = THREADS_PER_BLOCK;
+    int N = length;
+    int num_blocks = (N + TPB - 1) / TPB;
+
+    int* d_flag = nullptr;
+    cudaMalloc(&d_flag, N * sizeof(int));
+
+    mark_repeats<<<num_blocks, TPB>>>(d_in, d_flag, N);
+
+    int* d_pos = nullptr;
+    cudaMalloc(&d_pos, N * sizeof(int));
+
+    exclusive_scan(d_flag, N, d_pos);
+
+    scatter_indices<<<num_blocks, TPB>>>(d_flag, d_pos, N, d_out);
+
+    int count = 0;
+    int last_pos = 0;
+    cudaMemcpy(&last_pos, d_pos + (N - 1), sizeof(int), cudaMemcpyDeviceToHost);
+    count = last_pos;
+
+    cudaFree(d_flag);
+    cudaFree(d_pos);
+
+    return count;
 }
 
 //
